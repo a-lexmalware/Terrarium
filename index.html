@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Terrarium - Modelo 3D</title>
+<style>
+  html, body { margin:0; padding:0; overflow:hidden; background:#0d0705; }
+  canvas { display:block; }
+  #label {
+    position:fixed; top:16px; left:16px; color:#f0e6d8;
+    font-family: -apple-system, sans-serif; font-size:13px; background:rgba(10,6,4,0.6);
+    padding:10px 14px; border-radius:8px; line-height:1.6; backdrop-filter: blur(4px);
+  }
+  #label b { color:#F2A623; font-size:14px; }
+  .sw { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; }
+  #tooltip {
+    position:fixed; pointer-events:none; background:rgba(15,10,7,0.92); color:#f5ede2;
+    font-family:-apple-system, sans-serif; font-size:13px; padding:10px 13px; border-radius:8px;
+    max-width:230px; line-height:1.5; opacity:0; transition:opacity 0.12s ease; z-index:10;
+    border:1px solid rgba(242,166,35,0.35);
+  }
+  #tooltip b { color:#F2A623; display:block; margin-bottom:3px; font-size:13.5px; }
+  #vignette {
+    position:fixed; inset:0; pointer-events:none; z-index:5;
+    background: radial-gradient(ellipse at center, rgba(0,0,0,0) 45%, rgba(10,5,3,0.55) 100%);
+  }
+</style>
+</head>
+<body>
+<div id="label">
+  <b>Terrarium</b> - Mars Challenge 2026<br>
+  <span class="sw" style="background:#5a7c3a"></span>Produccion vegetal<br>
+  <span class="sw" style="background:#2c6f8e"></span>Cultivo acuatico<br>
+  <span class="sw" style="background:#6b4226"></span>Compostaje<br>
+  <span class="sw" style="background:#F2A623"></span>Sensor de monitoreo
+</div>
+<div id="tooltip"></div>
+<div id="vignette"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+var scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x9a5a42, 0.028);
+
+var camera = new THREE.PerspectiveCamera(42, window.innerWidth/window.innerHeight, 0.1, 300);
+var renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+if (THREE.ACESFilmicToneMapping) renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.08;
+if (renderer.outputEncoding !== undefined) renderer.outputEncoding = THREE.sRGBEncoding;
+document.body.appendChild(renderer.domElement);
+
+// ---------- Sky dome ----------
+var skyGeo = new THREE.SphereGeometry(120, 32, 16);
+var skyPos = skyGeo.attributes.position;
+var skyColors = [];
+var topColor = new THREE.Color(0x2e1a12);
+var horizonColor = new THREE.Color(0xd98a5f);
+for (var i = 0; i < skyPos.count; i++) {
+  var y = skyPos.getY(i) / 120;
+  var tt = THREE.MathUtils.clamp((y + 0.15) / 0.6, 0, 1);
+  var c = horizonColor.clone().lerp(topColor, tt);
+  skyColors.push(c.r, c.g, c.b);
+}
+skyGeo.setAttribute('color', new THREE.Float32BufferAttribute(skyColors, 3));
+var skyMat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog:false });
+scene.add(new THREE.Mesh(skyGeo, skyMat));
+
+// ---------- Sun with layered glow ----------
+function makeGlowSprite(size, innerColor, outerColor, alpha){
+  var c = document.createElement('canvas');
+  c.width = 128; c.height = 128;
+  var ctx = c.getContext('2d');
+  var g = ctx.createRadialGradient(64,64,0,64,64,64);
+  g.addColorStop(0, innerColor);
+  g.addColorStop(0.4, outerColor);
+  g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0,0,128,128);
+  var tex = new THREE.CanvasTexture(c);
+  var sp = new THREE.Sprite(new THREE.SpriteMaterial({ map:tex, transparent:true, depthWrite:false, opacity:alpha }));
+  sp.scale.set(size,size,1);
+  return sp;
+}
+var sunPos = new THREE.Vector3(24, 18, -34);
+var sunHalo = makeGlowSprite(34, 'rgba(255,220,170,0.5)', 'rgba(255,190,110,0.15)', 0.7);
+sunHalo.position.copy(sunPos);
+scene.add(sunHalo);
+var sunCore = makeGlowSprite(15, 'rgba(255,240,210,1)', 'rgba(255,205,130,0.55)', 1);
+sunCore.position.copy(sunPos);
+scene.add(sunCore);
+
+// ---------- Moons (Phobos, Deimos) ----------
+function makeMoon(size, dist, angle, height, color){
+  var geo = new THREE.IcosahedronGeometry(size, 1);
+  var pos = geo.attributes.position;
+  for (var i=0;i<pos.count;i++){
+    var j = 1 + (Math.random()-0.5)*0.4;
+    pos.setXYZ(i, pos.getX(i)*j, pos.getY(i)*j, pos.getZ(i)*j);
+  }
+  geo.computeVertexNormals();
+  var mat = new THREE.MeshStandardMaterial({ color:color, roughness:1, flatShading:true, emissive:color, emissiveIntensity:0.08 });
+  var m = new THREE.Mesh(geo, mat);
+  m.position.set(Math.cos(angle)*dist, height, Math.sin(angle)*dist);
+  scene.add(m);
+}
+makeMoon(0.6, 60, 2.3, 22, 0x8a8378);
+makeMoon(0.35, 75, 1.1, 30, 0x6f6a60);
+
+// ---------- Distant mountains ----------
+var mountainGroup = new THREE.Group();
+var mtCount = 16;
+for (var i=0;i<mtCount;i++){
+  var a = (i/mtCount)*Math.PI*2 + Math.random()*0.15;
+  var dist = 34 + Math.random()*10;
+  var h = 3 + Math.random()*5;
+  var r = 3 + Math.random()*4;
+  var geo = new THREE.ConeGeometry(r, h, 5);
+  var pos = geo.attributes.position;
+  for (var j=0;j<pos.count;j++){
+    pos.setX(j, pos.getX(j) + (Math.random()-0.5)*0.6);
+    pos.setZ(j, pos.getZ(j) + (Math.random()-0.5)*0.6);
+  }
+  geo.computeVertexNormals();
+  var t = Math.random();
+  var col = new THREE.Color(0x7a4a34).lerp(new THREE.Color(0x4a2c1e), t);
+  var mat = new THREE.MeshStandardMaterial({ color:col, roughness:1, flatShading:true, fog:true });
+  var mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(Math.cos(a)*dist, h/2 - 0.3, Math.sin(a)*dist);
+  mountainGroup.add(mesh);
+}
+scene.add(mountainGroup);
+
+// ---------- Terrain ----------
+function noise2(x, z) {
+  return Math.sin(x*0.6)*Math.cos(z*0.55) + Math.sin(x*1.7+1.3)*0.35*Math.cos(z*1.3)
+       + Math.sin(x*0.15-z*0.2)*0.6 + Math.sin(x*2.6-z*2.1)*0.08
+       + Math.sin(x*6.0+z*5.2)*0.02;
+}
+var groundSeg = 120;
+var groundGeo = new THREE.PlaneGeometry(80, 80, groundSeg, groundSeg);
+groundGeo.rotateX(-Math.PI/2);
+var gPos = groundGeo.attributes.position;
+var gColors = [];
+var duneColorA = new THREE.Color(0x7a3a24);
+var duneColorB = new THREE.Color(0xa5623c);
+var duneColorC = new THREE.Color(0x5c2c1a);
+for (var i = 0; i < gPos.count; i++) {
+  var x = gPos.getX(i), z = gPos.getZ(i);
+  var dist = Math.sqrt(x*x+z*z);
+  var falloff = THREE.MathUtils.clamp((dist - 4.2) / 6, 0, 1);
+  var ripple = Math.sin(x*2.2 + Math.sin(z*0.3)*2) * 0.03 * falloff;
+  var h = noise2(x*0.5, z*0.5) * 0.35 * falloff + ripple;
+  var crater = Math.max(0, 0.9 - Math.abs(noise2(x*1.3+9, z*1.3-4))) * 0.15 * falloff;
+  gPos.setY(i, h - crater);
+  var mixT = THREE.MathUtils.clamp((h + 0.3) / 0.6, 0, 1);
+  var c = duneColorA.clone().lerp(duneColorB, mixT);
+  if (crater > 0.05) c = c.clone().lerp(duneColorC, Math.min(crater*4,1));
+  gColors.push(c.r, c.g, c.b);
+}
+groundGeo.computeVertexNormals();
+groundGeo.setAttribute('color', new THREE.Float32BufferAttribute(gColors, 3));
+var groundMat = new THREE.MeshStandardMaterial({ vertexColors:true, roughness:1, metalness:0 });
+var ground = new THREE.Mesh(groundGeo, groundMat);
+ground.receiveShadow = true;
+ground.userData = { name:'Superficie marciana', desc:'Terreno exterior hostil; el sistema opera aislado de estas condiciones.' };
+scene.add(ground);
+
+var pickables = [ground];
+
+function addRock(x,z,s,c){
+  var geo = new THREE.DodecahedronGeometry(s, 0);
+  var pos = geo.attributes.position;
+  for (var i=0;i<pos.count;i++){
+    pos.setXYZ(i, pos.getX(i)*(0.85+Math.random()*0.3), pos.getY(i)*(0.85+Math.random()*0.3), pos.getZ(i)*(0.85+Math.random()*0.3));
+  }
+  geo.computeVertexNormals();
+  var mat = new THREE.MeshStandardMaterial({ color:c, roughness:1, flatShading:true });
+  var r = new THREE.Mesh(geo, mat);
+  r.position.set(x, s*0.45, z);
+  r.rotation.set(Math.random()*Math.PI, Math.random()*Math.PI, Math.random()*Math.PI);
+  r.castShadow = true; r.receiveShadow = true;
+  scene.add(r);
+}
+for (var i=0;i<28;i++){
+  var ang = Math.random()*Math.PI*2;
+  var rad = 6 + Math.random()*20;
+  addRock(Math.cos(ang)*rad, Math.sin(ang)*rad, 0.18+Math.random()*0.65, Math.random()>0.5?0x4a2a1a:0x5a3020);
+}
+
+// ---------- Contact shadow helper ----------
+function makeShadowTexture(){
+  var c = document.createElement('canvas');
+  c.width = 128; c.height = 128;
+  var ctx = c.getContext('2d');
+  var g = ctx.createRadialGradient(64,64,0,64,64,64);
+  g.addColorStop(0, 'rgba(0,0,0,0.45)');
+  g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0,0,128,128);
+  return new THREE.CanvasTexture(c);
+}
+var shadowTex = makeShadowTexture();
+function addContactShadow(x, y, z, radius){
+  var geo = new THREE.CircleGeometry(radius, 24);
+  var mat = new THREE.MeshBasicMaterial({ map:shadowTex, transparent:true, depthWrite:false });
+  var m = new THREE.Mesh(geo, mat);
+  m.rotation.x = -Math.PI/2;
+  m.position.set(x, y, z);
+  scene.add(m);
+}
+
+// ---------- Base platform ----------
+var domeRadius = 3;
+var baseGroup = new THREE.Group();
+baseGroup.userData = { name:'Plataforma base', desc:'Estructura de soporte y anclaje que sella el sistema del terreno marciano.' };
+var baseRing = new THREE.Mesh(
+  new THREE.CylinderGeometry(domeRadius+0.15, domeRadius+0.25, 0.3, 48),
+  new THREE.MeshStandardMaterial({ color:0x2b2b2e, metalness:0.65, roughness:0.35 })
+);
+baseRing.castShadow = true; baseRing.receiveShadow = true;
+baseGroup.add(baseRing);
+var flange = new THREE.Mesh(
+  new THREE.TorusGeometry(domeRadius+0.25, 0.06, 8, 48),
+  new THREE.MeshStandardMaterial({ color:0x3a3a3f, metalness:0.7, roughness:0.3 })
+);
+flange.rotation.x = Math.PI/2;
+flange.position.y = 0.16;
+baseGroup.add(flange);
+// bolts around flange
+for (var i=0;i<16;i++){
+  var a = (i/16)*Math.PI*2;
+  var bolt = new THREE.Mesh(new THREE.CylinderGeometry(0.03,0.03,0.08,6), new THREE.MeshStandardMaterial({color:0x1c1c1f, metalness:0.8, roughness:0.3}));
+  bolt.position.set(Math.cos(a)*(domeRadius+0.25), 0.19, Math.sin(a)*(domeRadius+0.25));
+  baseGroup.add(bolt);
+}
+scene.add(baseGroup);
+pickables.push(baseGroup);
+addContactShadow(0, 0.01, 0, domeRadius+1.2);
+
+// ---------- Floor zone wedges ----------
+function wedgeShape(startAngle, angleLen, r){
+  var shape = new THREE.Shape();
+  shape.moveTo(0,0);
+  var segs = 20;
+  for (var i=0;i<=segs;i++){
+    var a = startAngle + (angleLen*i/segs);
+    shape.lineTo(Math.cos(a)*r, Math.sin(a)*r);
+  }
+  shape.lineTo(0,0);
+  return shape;
+}
+var zoneDefs = [
+  { start: Math.PI*0.16, len: Math.PI*2/3 - 0.05, color:0x5a7c3a, name:'Zona de produccion vegetal', desc:'Plantas que generan oxigeno y alimento mediante fotosintesis.' },
+  { start: Math.PI*0.16 + Math.PI*2/3, len: Math.PI*2/3 - 0.05, color:0x2c6f8e, name:'Zona de cultivo acuatico', desc:'Filtra agua y aporta proteina al sistema mediante cultivo acuatico.' },
+  { start: Math.PI*0.16 + Math.PI*4/3, len: Math.PI*2/3 - 0.05, color:0x6b4226, name:'Zona de compostaje', desc:'Descompone residuos organicos y los convierte en nutrientes reutilizables.' }
+];
+zoneDefs.forEach(function(z){
+  var shape = wedgeShape(z.start, z.len, domeRadius-0.15);
+  var extrude = new THREE.ExtrudeGeometry(shape, { depth:0.06, bevelEnabled:false });
+  extrude.rotateX(-Math.PI/2);
+  var mat = new THREE.MeshStandardMaterial({ color:z.color, roughness:0.85, metalness:0.05 });
+  var mesh = new THREE.Mesh(extrude, mat);
+  mesh.position.y = 0.16;
+  mesh.receiveShadow = true;
+  mesh.userData = { name:z.name, desc:z.desc };
+  scene.add(mesh);
+  pickables.push(mesh);
+  z.centerAngle = z.start + z.len/2;
+});
+
+// ---------- Connecting pipes ----------
+function addPipe(angleA, angleB, r){
+  var pA = new THREE.Vector3(Math.cos(angleA)*r, 0.22, Math.sin(angleA)*r);
+  var pB = new THREE.Vector3(Math.cos(angleB)*r, 0.22, Math.sin(angleB)*r);
+  var mid = pA.clone().lerp(pB, 0.5).multiplyScalar(0.45);
+  mid.y = 0.24;
+  var curve = new THREE.QuadraticBezierCurve3(pA, mid, pB);
+  var tubeGeo = new THREE.TubeGeometry(curve, 20, 0.05, 8, false);
+  var tubeMat = new THREE.MeshStandardMaterial({ color:0x8a8a8f, metalness:0.75, roughness:0.3 });
+  var tube = new THREE.Mesh(tubeGeo, tubeMat);
+  tube.castShadow = true;
+  tube.userData = { name:'Tuberia de intercambio', desc:'Transporta agua y nutrientes entre subsistemas para cerrar el ciclo.' };
+  scene.add(tube);
+  pickables.push(tube);
+}
+addPipe(zoneDefs[0].centerAngle, zoneDefs[1].centerAngle, 1.35);
+addPipe(zoneDefs[1].centerAngle, zoneDefs[2].centerAngle, 1.35);
+addPipe(zoneDefs[2].centerAngle, zoneDefs[0].centerAngle, 1.35);
+
+// ---------- Geodesic glass dome ----------
+var domeGeo = new THREE.SphereGeometry(domeRadius, 14, 8, 0, Math.PI*2, 0, Math.PI/2);
+domeGeo.computeVertexNormals();
+var domeMat = new THREE.MeshPhysicalMaterial({
+  color: 0xbfe6f2, transparent:true, opacity:0.14, roughness:0.04, metalness:0.05,
+  side: THREE.DoubleSide, clearcoat:1, clearcoatRoughness:0.08, reflectivity:0.5, flatShading:true
+});
+var domeMesh = new THREE.Mesh(domeGeo, domeMat);
+domeMesh.position.y = 0.19;
+domeMesh.userData = { name:'Domo geodesico', desc:'Envolvente de vidrio que aisla el ecosistema del exterior marciano y deja pasar la luz solar.' };
+scene.add(domeMesh);
+pickables.push(domeMesh);
+
+var edges = new THREE.EdgesGeometry(domeGeo);
+var strutMat = new THREE.LineBasicMaterial({ color:0x2a2a2e });
+var struts = new THREE.LineSegments(edges, strutMat);
+struts.position.y = 0.19;
+struts.userData = { name:'Estructura de vigas', desc:'Armazon que sostiene los paneles de vidrio del domo.' };
+scene.add(struts);
+pickables.push(struts);
+
+// ---------- Plants (with sway) ----------
+var plantGroups = [];
+function addPlant(angle, dist, scale){
+  var group = new THREE.Group();
+  var trunkH = 0.35*scale;
+  var trunk = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.025*scale,0.04*scale,trunkH,6),
+    new THREE.MeshStandardMaterial({ color:0x3d5a28, roughness:0.9 })
+  );
+  trunk.position.y = trunkH/2;
+  trunk.castShadow = true;
+  group.add(trunk);
+  var foliageColors = [0x5a7c3a, 0x6f9a44, 0x4a6b30];
+  for (var i=0;i<3;i++){
+    var s = (0.22 + Math.random()*0.12) * scale;
+    var leaf = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(s, 0),
+      new THREE.MeshStandardMaterial({ color: foliageColors[i%3], roughness:0.85, flatShading:true })
+    );
+    leaf.position.set((Math.random()-0.5)*0.25*scale, trunkH + s*0.6 + i*0.05, (Math.random()-0.5)*0.25*scale);
+    leaf.castShadow = true;
+    group.add(leaf);
+  }
+  var x = Math.cos(angle)*dist, z = Math.sin(angle)*dist;
+  group.position.set(x, 0.19, z);
+  group.userData = { name:'Planta', desc:'Convierte luz, agua y nutrientes en oxigeno y alimento para la tripulacion.', swayPhase: Math.random()*Math.PI*2 };
+  scene.add(group);
+  pickables.push(group);
+  plantGroups.push(group);
+  addContactShadow(x, 0.2, z, 0.32*scale);
+}
+var plantZone = zoneDefs[0];
+for (var i=0;i<8;i++){
+  var a = plantZone.start + 0.15 + Math.random()*(plantZone.len-0.3);
+  var d = 0.65 + Math.random()*1.75;
+  addPlant(a, d, 0.7 + Math.random()*0.6);
+}
+
+// ---------- Water pool ----------
+var waterZone = zoneDefs[1];
+var poolRadius = 1.3;
+var poolGeo = new THREE.CircleGeometry(poolRadius, 40, 0, Math.PI*2);
+var poolMat = new THREE.MeshStandardMaterial({ color:0x1f6fa0, roughness:0.2, metalness:0.35, transparent:true, opacity:0.9 });
+var pool = new THREE.Mesh(poolGeo, poolMat);
+pool.rotation.x = -Math.PI/2;
+var wx = Math.cos(waterZone.centerAngle)*1.2, wz = Math.sin(waterZone.centerAngle)*1.2;
+pool.position.set(wx, 0.2, wz);
+pool.receiveShadow = true;
+pool.userData = { name:'Cultivo acuatico', desc:'Peces y algas que filtran el agua y aportan proteina al ciclo cerrado.' };
+scene.add(pool);
+pickables.push(pool);
+var poolBasePos = poolGeo.attributes.position.clone();
+var poolRim = new THREE.Mesh(
+  new THREE.TorusGeometry(poolRadius, 0.04, 8, 40),
+  new THREE.MeshStandardMaterial({ color:0x3a3a3f, metalness:0.6, roughness:0.4 })
+);
+poolRim.rotation.x = Math.PI/2;
+poolRim.position.set(wx, 0.2, wz);
+scene.add(poolRim);
+
+// ---------- Compost ----------
+var compostZone = zoneDefs[2];
+var compostGroup = new THREE.Group();
+compostGroup.userData = { name:'Compostaje', desc:'Descompone residuos organicos y devuelve nutrientes al ciclo del sistema.' };
+var compGeo = new THREE.IcosahedronGeometry(0.55, 1);
+var cPos = compGeo.attributes.position;
+for (var i=0;i<cPos.count;i++){
+  var jitter = 0.07;
+  cPos.setXYZ(i, cPos.getX(i)+(Math.random()-0.5)*jitter, cPos.getY(i)*0.55 + Math.abs((Math.random()-0.5))*0.1, cPos.getZ(i)+(Math.random()-0.5)*jitter);
+}
+compGeo.computeVertexNormals();
+var compMat = new THREE.MeshStandardMaterial({ color:0x5a3a1e, roughness:1, flatShading:true });
+var compost = new THREE.Mesh(compGeo, compMat);
+var cx = Math.cos(compostZone.centerAngle)*1.3, cz = Math.sin(compostZone.centerAngle)*1.3;
+compost.position.set(cx, 0.4, cz);
+compost.castShadow = true; compost.receiveShadow = true;
+compostGroup.add(compost);
+var binRing = new THREE.Mesh(
+  new THREE.TorusGeometry(0.75, 0.04, 8, 24),
+  new THREE.MeshStandardMaterial({ color:0x3a3a3f, metalness:0.6, roughness:0.4 })
+);
+binRing.rotation.x = Math.PI/2;
+binRing.position.set(cx, 0.2, cz);
+compostGroup.add(binRing);
+scene.add(compostGroup);
+pickables.push(compostGroup);
+addContactShadow(cx, 0.21, cz, 0.85);
+
+// ---------- Monitoring sensor mast ----------
+var sensorGroup = new THREE.Group();
+sensorGroup.userData = { name:'Sensor de monitoreo', desc:'Mide agua, nutrientes y gases en tiempo real y ajusta los flujos entre zonas automaticamente.' };
+var mast = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.03,0.03, domeRadius*0.9, 8),
+  new THREE.MeshStandardMaterial({ color:0x3a3a3f, metalness:0.7, roughness:0.3 })
+);
+mast.position.set(0, domeRadius*0.65, 0);
+sensorGroup.add(mast);
+var sensor = new THREE.Mesh(
+  new THREE.SphereGeometry(0.13, 16, 16),
+  new THREE.MeshStandardMaterial({ color:0xF2A623, emissive:0xF2A623, emissiveIntensity:0.9, roughness:0.4 })
+);
+sensor.position.set(0, domeRadius + 0.2, 0);
+sensorGroup.add(sensor);
+scene.add(sensorGroup);
+pickables.push(sensorGroup);
+var sensorLight = new THREE.PointLight(0xF2A623, 0.6, 2.5);
+sensorLight.position.copy(sensor.position);
+scene.add(sensorLight);
+
+// ---------- Dust particles (with drift) ----------
+var dustCount = 400;
+var dustGeo = new THREE.BufferGeometry();
+var dustPos = new Float32Array(dustCount*3);
+var dustVel = [];
+for (var i=0;i<dustCount;i++){
+  dustPos[i*3] = (Math.random()-0.5)*50;
+  dustPos[i*3+1] = Math.random()*7;
+  dustPos[i*3+2] = (Math.random()-0.5)*50;
+  dustVel.push(0.004+Math.random()*0.01);
+}
+dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
+var dustMat = new THREE.PointsMaterial({ color:0xd6a878, size:0.055, transparent:true, opacity:0.32 });
+var dust = new THREE.Points(dustGeo, dustMat);
+scene.add(dust);
+
+// ---------- Lighting ----------
+var ambient = new THREE.HemisphereLight(0xd98a5f, 0x3a2418, 0.55);
+scene.add(ambient);
+var sun = new THREE.DirectionalLight(0xffd9a8, 1.35);
+sun.position.copy(sunPos).multiplyScalar(1);
+sun.position.set(sunPos.x*1.4, sunPos.y*1.4, sunPos.z*1.4);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -10; sun.shadow.camera.right = 10;
+sun.shadow.camera.top = 10; sun.shadow.camera.bottom = -10;
+sun.shadow.camera.far = 80;
+sun.shadow.bias = -0.0015;
+scene.add(sun);
+var fill = new THREE.DirectionalLight(0x7fa8c9, 0.22);
+fill.position.set(-10, 6, 8);
+scene.add(fill);
+var rim = new THREE.DirectionalLight(0xffb87a, 0.4);
+rim.position.set(-sunPos.x*0.6, 4, -sunPos.z*0.6);
+scene.add(rim);
+
+// ---------- Cinematic camera waypoints ----------
+function zonePos(angle, dist, height){ return new THREE.Vector3(Math.cos(angle)*dist, height, Math.sin(angle)*dist); }
+var waypoints = [
+  { pos: new THREE.Vector3(6.5, 3.4, 8), look: new THREE.Vector3(0, 1.1, 0) },
+  { pos: zonePos(zoneDefs[0].centerAngle, domeRadius+2.3, 1.5), look: zonePos(zoneDefs[0].centerAngle, 1.0, 0.7) },
+  { pos: zonePos(zoneDefs[1].centerAngle, domeRadius+2.3, 1.4), look: zonePos(zoneDefs[1].centerAngle, 1.0, 0.5) },
+  { pos: zonePos(zoneDefs[2].centerAngle, domeRadius+2.3, 1.5), look: zonePos(zoneDefs[2].centerAngle, 1.0, 0.6) },
+  { pos: new THREE.Vector3(1.5, domeRadius+3.6, 2.2), look: new THREE.Vector3(0, 1.4, 0) }
+];
+function smoothstep(x){ return x*x*(3-2*x); }
+var legDuration = 6.5;
+var lookTarget = new THREE.Vector3();
+
+// ---------- Hover picking ----------
+var raycaster = new THREE.Raycaster();
+raycaster.params.Line.threshold = 0.12;
+var mouseNDC = new THREE.Vector2(-10, -10);
+var tooltip = document.getElementById('tooltip');
+window.addEventListener('mousemove', function(e){
+  mouseNDC.x = (e.clientX / window.innerWidth) * 2 - 1;
+  mouseNDC.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  tooltip.style.left = (e.clientX + 16) + 'px';
+  tooltip.style.top = (e.clientY + 16) + 'px';
+});
+function findNamed(obj){
+  while (obj){
+    if (obj.userData && obj.userData.name) return obj.userData;
+    obj = obj.parent;
+  }
+  return null;
+}
+
+// ---------- Animation loop ----------
+var t = 0;
+function animate() {
+  requestAnimationFrame(animate);
+  t += 0.016;
+
+  var elapsed = t;
+  var totalLegs = waypoints.length;
+  var legIndex = Math.floor(elapsed / legDuration) % totalLegs;
+  var nextIndex = (legIndex + 1) % totalLegs;
+  var localT = (elapsed % legDuration) / legDuration;
+  var eased = smoothstep(localT);
+  camera.position.lerpVectors(waypoints[legIndex].pos, waypoints[nextIndex].pos, eased);
+  lookTarget.lerpVectors(waypoints[legIndex].look, waypoints[nextIndex].look, eased);
+  camera.position.y += Math.sin(t*0.4)*0.05;
+  camera.lookAt(lookTarget);
+
+  var s = 1 + Math.sin(t*3) * 0.2;
+  sensor.scale.set(s,s,s);
+  sensorLight.intensity = 0.5 + Math.sin(t*3)*0.25;
+
+  var posAttr = pool.geometry.attributes.position;
+  for (var i=0;i<posAttr.count;i++){
+    var bx = poolBasePos.getX(i), by = poolBasePos.getY(i);
+    var wave = Math.sin(bx*3 + t*1.5) * 0.015 + Math.cos(by*3 + t*1.2) * 0.015;
+    posAttr.setZ(i, wave);
+  }
+  posAttr.needsUpdate = true;
+
+  plantGroups.forEach(function(g){
+    g.rotation.z = Math.sin(t*0.6 + g.userData.swayPhase) * 0.045;
+  });
+
+  var dustP = dust.geometry.attributes.position;
+  for (var i=0;i<dustCount;i++){
+    var nx = dustP.getX(i) + dustVel[i]*0.3;
+    if (nx > 25) nx = -25;
+    dustP.setX(i, nx);
+  }
+  dustP.needsUpdate = true;
+  dust.rotation.y += 0.0003;
+
+  raycaster.setFromCamera(mouseNDC, camera);
+  var hits = raycaster.intersectObjects(pickables, true);
+  if (hits.length > 0) {
+    var info = findNamed(hits[0].object);
+    if (info) {
+      tooltip.innerHTML = '<b>' + info.name + '</b>' + info.desc;
+      tooltip.style.opacity = '1';
+    } else {
+      tooltip.style.opacity = '0';
+    }
+  } else {
+    tooltip.style.opacity = '0';
+  }
+
+  renderer.render(scene, camera);
+}
+animate();
+
+window.addEventListener('resize', function() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>
